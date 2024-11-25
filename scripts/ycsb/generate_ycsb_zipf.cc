@@ -76,7 +76,7 @@ void gen_bin_txn(Rand* rand, std::ofstream* f, int contention)
 {
   auto keys = gen_keys(rand, contention);
   auto ws = gen_write_set(contention);
-  int padding = 86;
+  int padding = 8 * ROW_PER_TX + 6;
 
   // pack
   for (const uint32_t& key : keys)

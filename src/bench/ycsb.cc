@@ -46,7 +46,6 @@ struct __attribute__((packed)) YCSBTransactionMarshalled
   uint64_t cown_ptrs[ROWS_PER_TX];
   uint8_t pad[6];
 };
-static_assert(sizeof(YCSBTransactionMarshalled) == 128);
 
 struct YCSBTransaction
 {
@@ -89,27 +88,9 @@ public:
     auto ws_cap = txm->write_set;
 
 #if defined(INDEXER) || defined(TEST_TWO)
-    GET_COWN(0);
-    GET_COWN(1);
-    GET_COWN(2);
-    GET_COWN(3);
-    GET_COWN(4);
-    GET_COWN(5);
-    GET_COWN(6);
-    GET_COWN(7);
-    GET_COWN(8);
-    GET_COWN(9);
+    GET_COWN(0);GET_COWN(1);GET_COWN(2);GET_COWN(3);GET_COWN(4);GET_COWN(5);GET_COWN(6);GET_COWN(7);GET_COWN(8);GET_COWN(9);
 #else
-    GET_ROW(0);
-    GET_ROW(1);
-    GET_ROW(2);
-    GET_ROW(3);
-    GET_ROW(4);
-    GET_ROW(5);
-    GET_ROW(6);
-    GET_ROW(7);
-    GET_ROW(8);
-    GET_ROW(9);
+    GET_ROW(0);GET_ROW(1);GET_ROW(2);GET_ROW(3);GET_ROW(4);GET_ROW(5);GET_ROW(6);GET_ROW(7);GET_ROW(8);GET_ROW(9);
 #endif
 
     using AcqType = acquired_cown<YCSBRow>;
@@ -119,29 +100,11 @@ public:
 #else
     when(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9) << [ws_cap]
 #endif
-      (AcqType acq_row0,
-       AcqType acq_row1,
-       AcqType acq_row2,
-       AcqType acq_row3,
-       AcqType acq_row4,
-       AcqType acq_row5,
-       AcqType acq_row6,
-       AcqType acq_row7,
-       AcqType acq_row8,
-       AcqType acq_row9) {
+      (AcqType acq_row0,AcqType acq_row1,AcqType acq_row2,AcqType acq_row3,AcqType acq_row4,AcqType acq_row5,AcqType acq_row6,AcqType acq_row7,AcqType acq_row8,AcqType acq_row9) {
         uint8_t sum = 0;
         uint16_t write_set_l = ws_cap;
         int j;
-        TXN(0);
-        TXN(1);
-        TXN(2);
-        TXN(3);
-        TXN(4);
-        TXN(5);
-        TXN(6);
-        TXN(7);
-        TXN(8);
-        TXN(9);
+        TXN(0);TXN(1);TXN(2);TXN(3);TXN(4);TXN(5);TXN(6);TXN(7);TXN(8);TXN(9);
         M_LOG_LATENCY();
       };
     return sizeof(YCSBTransactionMarshalled);
