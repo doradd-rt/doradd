@@ -334,10 +334,10 @@ struct Prefetcher
   char* read_top;
   uint32_t read_count;
   rigtorp::SPSCQueue<int>* ring;
+  uint64_t handled_req_cnt;
 
 #if defined(INDEXER)
   rigtorp::SPSCQueue<int>* ring_indexer;
-  uint64_t handled_req_cnt;
 
   Prefetcher(
     void* mmap_ret,
@@ -348,13 +348,43 @@ struct Prefetcher
     ring_indexer(ring_indexer_)
 #else
 
-  Prefetcher(void* mmap_ret, rigtorp::SPSCQueue<int>* ring_)
-  : read_top(reinterpret_cast<char*>(mmap_ret)), ring(ring_)
+  std::atomic<uint64_t>* recvd_req_cnt;
+
+  Prefetcher(void* mmap_ret, rigtorp::SPSCQueue<int>* ring_, std::atomic<uint64_t>* recvd_req_cnt_)
+  : read_top(reinterpret_cast<char*>(mmap_ret)), ring(ring_), recvd_req_cnt(recvd_req_cnt_)
 #endif
   {
     read_count = *(reinterpret_cast<uint32_t*>(read_top));
     read_top += sizeof(uint32_t);
   }
+
+#ifdef TEST_TWO
+  size_t check_avail_cnts()
+  {
+    uint64_t avail_cnt;
+    size_t dyn_batch;
+
+    do
+    {
+      uint64_t load_val = recvd_req_cnt->load(std::memory_order_relaxed);
+      avail_cnt = load_val - handled_req_cnt;
+      if (avail_cnt >= MAX_BATCH)
+        dyn_batch = MAX_BATCH;
+      else if (avail_cnt > 0)
+        dyn_batch = static_cast<size_t>(avail_cnt);
+      else
+      {
+        _mm_pause();
+        continue;
+      }
+    } while (avail_cnt == 0);
+
+    handled_req_cnt += dyn_batch;
+
+    return dyn_batch;
+  }
+
+#endif
 
   void run()
   {
@@ -363,7 +393,7 @@ struct Prefetcher
     char* read_head = read_top;
     char* prepare_read_head = read_top;
     size_t i;
-    size_t batch_sz;
+    size_t batch_sz = 0;
 
     while (1)
     {
@@ -377,11 +407,13 @@ struct Prefetcher
 #ifdef INDEXER
       if (!ring_indexer->front())
         continue;
-#endif
 
       batch_sz = static_cast<size_t>(*ring_indexer->front());
+#endif
 
 #ifdef TEST_TWO
+      batch_sz = check_avail_cnts();
+
       for (i = 0; i < batch_sz; i++)
       {
         ret = T::prepare_cowns(prepare_read_head);
@@ -404,7 +436,7 @@ struct Prefetcher
       ring->push(batch_sz);
       ring_indexer->pop();
 #else
-      ring->push(ret);
+      ring->push(batch_sz);
 #endif
     }
   }

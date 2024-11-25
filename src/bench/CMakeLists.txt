@@ -28,9 +28,9 @@ find_package(Threads REQUIRED)
 
 # YCSB
 add_executable(ycsb ycsb.cc)
-add_compile_definitions(PREFETCH)
-add_compile_definitions(CORE_PIPE)
-add_compile_definitions(INDEXER)
+#add_compile_definitions(PREFETCH)
+#add_compile_definitions(CORE_PIPE)
+#add_compile_definitions(INDEXER)
 # add_compile_definitions(RPC_LATENCY)
 # add_compile_definitions(LOG_LATENCY)
 #add_compile_definitions(LOG_SCHED_OHEAD)
@@ -56,6 +56,7 @@ add_custom_command(
 )
 
 # TPCC
+if(false)
 add_executable(tpcc ${CMAKE_SOURCE_DIR}/tpcc_gen.cc)
 
 
@@ -74,3 +75,4 @@ target_compile_definitions(tpcc PRIVATE -DSNMALLOC_CHEAP_CHECKS)
 target_compile_definitions(tpcc PRIVATE -DACQUIRE_ALL)
 target_link_libraries(tpcc PRIVATE ${CMAKE_THREAD_LIBS_INIT})
 target_link_libraries(tpcc PRIVATE atomic)
+endif()

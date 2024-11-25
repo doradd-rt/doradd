@@ -113,8 +113,8 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
     Spawner<T> spawner(
       ret, worker_cnt, counter_map, counter_map_mutex, &ring_pref_disp);
 #    endif // RPC_LATENCY
-#  else
-    Prefetcher<T> prefetcher(ret, &ring_pref_disp);
+#  else // TEST_TWO
+    Prefetcher<T> prefetcher(ret, &ring_pref_disp, &req_cnt);
     Spawner<T> spawner(
       ret, worker_cnt, counter_map, counter_map_mutex, &ring_pref_disp);
 #  endif // INDEXER
