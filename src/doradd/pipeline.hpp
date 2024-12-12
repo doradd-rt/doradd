@@ -41,7 +41,7 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
 
     uint64_t log_arr_addr = (uint64_t)log_arr;
 
-    std::string res_log_dir = "./results/";
+    std::string res_log_dir = "./fig8-results/";
     std::string res_log_suffix = "-latency.log";
     std::string res_log_name = res_log_dir + gen_type + res_log_suffix;
     FILE* res_log_fd =
@@ -79,7 +79,8 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
       &req_cnt
 #  ifdef RPC_LATENCY
       ,
-      log_arr_addr
+      log_arr_addr,
+      res_log_fd
 #  endif
     );
 
@@ -115,8 +116,19 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
 #    endif // RPC_LATENCY
 #  else // TEST_TWO
     Prefetcher<T> prefetcher(ret, &ring_pref_disp, &req_cnt);
+    #ifdef RPC_LATENCY
+    Spawner<T> spawner(
+      ret,
+      worker_cnt,
+      counter_map,
+      counter_map_mutex,
+      &ring_pref_disp,
+      log_arr_addr,
+      res_log_fd);
+    #else
     Spawner<T> spawner(
       ret, worker_cnt, counter_map, counter_map_mutex, &ring_pref_disp);
+    #endif
 #  endif // INDEXER
 
     std::thread spawner_thread([&]() mutable {
@@ -146,7 +158,7 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
     });
 
     // flush latency logs
-    std::this_thread::sleep_for(std::chrono::seconds(20));
+    std::this_thread::sleep_for(std::chrono::seconds(10));
 #ifdef CORE_PIPE
     pthread_cancel(spawner_thread.native_handle());
     pthread_cancel(prefetcher_thread.native_handle());

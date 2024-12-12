@@ -95,8 +95,8 @@ public:
 
     using AcqType = acquired_cown<YCSBRow>;
 #ifdef RPC_LATENCY
-    when(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9)
-      << [ws_cap, init_time]
+    when(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9) << [ws_cap, init_time]
+
 #else
     when(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9) << [ws_cap]
 #endif

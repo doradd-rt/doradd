@@ -49,6 +49,7 @@ private:
 #ifdef RPC_LATENCY
   uint64_t init_time_log_arr;
   int txn_log_id = 0;
+  FILE* res_log_fd;
   ts_type init_time;
 #endif
 
@@ -61,7 +62,8 @@ public:
     std::atomic<uint64_t>* recvd_req_cnt_
 #ifdef RPC_LATENCY
     ,
-    uint64_t init_time_log_arr_
+    uint64_t init_time_log_arr_,
+    FILE* res_log_fd_
 #endif
     )
   : read_top(reinterpret_cast<char*>(mmap_ret)),
@@ -71,7 +73,8 @@ public:
     recvd_req_cnt(recvd_req_cnt_)
 #ifdef RPC_LATENCY
     ,
-    init_time_log_arr(init_time_log_arr_)
+    init_time_log_arr(init_time_log_arr_),
+    res_log_fd(res_log_fd_)
 #endif
   {
     rnd = 1;
@@ -242,6 +245,9 @@ public:
         printf("spawn - %lf tx/s\n", tx_count / dur_cnt);
         printf(
           "exec  - %lf tx/s\n", (tx_exec_sum - last_tx_exec_sum) / dur_cnt);
+#ifdef RPC_LATENCY
+        fprintf(res_log_fd, "%lf\n", tx_count / dur_cnt);
+#endif
         tx_count = 0;
         last_tx_exec_sum = tx_exec_sum;
         last_print = time_now;
