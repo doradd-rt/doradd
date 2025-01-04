@@ -17,271 +17,66 @@
 #include <unordered_map>
 #include <vector>
 
+typedef rigtorp::SPSCQueue<int> InterCore;
+
 template<typename T>
-struct FileDispatcher
+struct DoraddBuf
 {
-private:
-  uint8_t worker_cnt;
-  bool counter_registered;
-  uint16_t rnd;
-  uint32_t idx;
-  size_t look_ahead;
-  uint32_t count;
-  char* read_head;
-  char* read_top;
-  char* prepare_parse_read_head;
-  char* prepare_proc_read_head;
-
-  std::unordered_map<std::thread::id, uint64_t*>* counter_map;
-  std::mutex* counter_map_mutex;
-  // std::vector<uint64_t*> counter_vec;
-
-  uint64_t tx_count;
-  uint64_t tx_spawn_sum;
-  uint64_t tx_exec_sum;
-  uint64_t last_tx_exec_sum;
-
-  std::atomic<uint64_t>* recvd_req_cnt;
-  uint64_t handled_req_cnt = 0;
-
-  ts_type last_print;
-
-#ifdef RPC_LATENCY
-  uint64_t init_time_log_arr;
-  int txn_log_id = 0;
-  ts_type init_time;
-#endif
-
-public:
-  FileDispatcher(
-    void* mmap_ret,
-    uint8_t worker_cnt_,
-    std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
-    std::mutex* counter_map_mutex_,
-    std::atomic<uint64_t>* recvd_req_cnt_
-#ifdef RPC_LATENCY
-    ,
-    uint64_t init_time_log_arr_
-#endif
-    )
-  : read_top(reinterpret_cast<char*>(mmap_ret)),
-    worker_cnt(worker_cnt_),
-    counter_map(counter_map_),
-    counter_map_mutex(counter_map_mutex_),
-    recvd_req_cnt(recvd_req_cnt_)
-#ifdef RPC_LATENCY
-    ,
-    init_time_log_arr(init_time_log_arr_)
-#endif
-  {
-    rnd = 1;
-    idx = 0;
-    count = *(reinterpret_cast<uint32_t*>(read_top));
-    printf("log count is %u\n", count);
-    read_top += sizeof(uint32_t);
-    read_head = read_top;
-    prepare_parse_read_head = read_top;
-    prepare_proc_read_head = read_top;
-    tx_count = 0;
-    tx_spawn_sum = 0;
-    tx_exec_sum = 0;
-    last_tx_exec_sum = 0;
-    counter_registered = false;
-    last_print = std::chrono::system_clock::now();
-    ;
-#ifdef RPC_LATENCY
-    init_time = last_print;
-#endif
-  }
-
-  void track_worker_counter()
-  {
-    if (counter_map->size() == worker_cnt)
-      counter_registered = true;
-  }
-
-  uint64_t calc_tx_exec_sum()
-  {
-    uint64_t sum = 0;
-    for (const auto& counter_pair : *counter_map)
-      sum += *(counter_pair.second);
-
-    return sum;
-  }
-
-  size_t check_avail_cnts()
-  {
-    uint64_t avail_cnt;
-    size_t dyn_batch;
-
-    do
-    {
-      uint64_t load_val = recvd_req_cnt->load(std::memory_order_relaxed);
-      avail_cnt = load_val - handled_req_cnt;
-      if (avail_cnt >= MAX_BATCH)
-        dyn_batch = MAX_BATCH;
-      else if (avail_cnt > 0)
-        dyn_batch = static_cast<size_t>(avail_cnt);
-      else
-      {
-        _mm_pause();
-        continue;
-      }
-    } while (avail_cnt == 0);
-
-    return dyn_batch;
-  }
-
-#ifdef RPC_LATENCY
-  int dispatch_one()
-  {
-    init_time = *reinterpret_cast<ts_type*>(
-      init_time_log_arr + (uint64_t)sizeof(ts_type) * txn_log_id);
-
-    txn_log_id++;
-    return T::parse_and_process(read_head, init_time);
-  }
-#else
-  int dispatch_one()
-  {
-    return T::parse_and_process(read_head);
-  }
-#endif
-
-  int dispatch_batch()
-  {
-    int i, j, ret = 0;
-    int prefetch_ret, dispatch_ret;
-
-    if (idx > (count - MAX_BATCH))
-    {
-      idx = 0;
-      read_head = read_top;
-      prepare_parse_read_head = read_top;
-      prepare_proc_read_head = read_top;
-    }
-
-    look_ahead = check_avail_cnts();
-
-    for (i = 0; i < look_ahead; i++)
-    {
-      prefetch_ret = T::prepare_cowns(prepare_proc_read_head);
-      prepare_proc_read_head += prefetch_ret;
-    }
-#ifdef PREFETCH
-    for (i = 0; i < look_ahead; i++)
-    {
-      prefetch_ret = T::prefetch_cowns(prepare_parse_read_head);
-      prepare_parse_read_head += prefetch_ret;
-    }
-#endif
-
-    // dispatch
-    for (j = 0; j < look_ahead; j++)
-    {
-      dispatch_ret = dispatch_one();
-      read_head += dispatch_ret;
-      ret += dispatch_ret;
-      idx++;
-      tx_count++;
-    }
-
-    handled_req_cnt += look_ahead;
-
-    return ret;
-  }
-
-#if 0
-  bool over_pending()
-  {
-    tx_exec_sum = calc_tx_exec_sum();
-    assert(tx_spawn_sum >= tx_exec_sum);
-    printf("spawn - %lu, exec - %lu\n", tx_spawn_sum, tx_exec_sum);
-    return (tx_spawn_sum - tx_exec_sum) > pending_threshold? true : false;
-  }
-#endif
-
-  void run()
-  {
-    // warm-up
-    prepare_run();
-
-    while (1)
-    {
-      if (!counter_registered)
-        track_worker_counter();
-
-#ifdef RPC_LATENCY
-      if (txn_log_id >= RPC_LOG_SIZE)
-        break;
-#endif
-
-#if 0
-      if (tx_spawn_sum >= spawn_threshold * rnd) [[unlikely]]
-      {
-        printf("flow control\n");
-        if (over_pending())
-          continue;
-        rnd++;
-        printf("new round\n");
-      }
-#endif
-
-      tx_spawn_sum += look_ahead;
-
-      int ret = dispatch_batch();
-
-      // announce throughput
-      if (tx_count >= ANNOUNCE_THROUGHPUT_BATCH_SIZE)
-      {
-        auto time_now = std::chrono::system_clock::now();
-        std::chrono::duration<double> duration = time_now - last_print;
-        auto dur_cnt = duration.count();
-        if (counter_registered)
-          tx_exec_sum = calc_tx_exec_sum();
-        printf("spawn - %lf tx/s\n", tx_count / dur_cnt);
-        printf(
-          "exec  - %lf tx/s\n", (tx_exec_sum - last_tx_exec_sum) / dur_cnt);
-        tx_count = 0;
-        last_tx_exec_sum = tx_exec_sum;
-        last_print = time_now;
-      }
-    }
-  }
+  /* uint64_t pkt_addr; */
+  typename T::Marshalled workload;
 };
 
 template<typename T>
-struct Indexer
+class alignas(64) BaseDispatcher
 {
-  uint32_t read_count;
-  char* read_top;
+protected:
+  uint32_t BUFFER_SIZE;
+  DoraddBuf<T>* req_buf;
+  char* curr_req;
+  uint64_t processed_cnt; // Local transaction counter
+
+  static constexpr uint64_t TERMINATION_COUNT = 40'000'000;
+
+  BaseDispatcher(void* mmap_ret)
+  {
+    BUFFER_SIZE = *(reinterpret_cast<uint32_t*>(mmap_ret));
+    req_buf = reinterpret_cast<DoraddBuf<T>*>(
+      reinterpret_cast<char*>(mmap_ret) + sizeof(uint32_t));
+    curr_req = reinterpret_cast<char*>(req_buf);
+  }
+
+  char* get_curr_req(int idx)
+  {
+    return reinterpret_cast<char*>(
+      &req_buf[idx % BUFFER_SIZE]);
+  }
+
+  bool terminate() const {
+    return processed_cnt >= TERMINATION_COUNT;
+  }
+
+  virtual void run() = 0;
+};
+
+class FirstCoreFunc
+{
+protected:
   std::atomic<uint64_t>* recvd_req_cnt;
   uint64_t handled_req_cnt;
 
-  // inter-thread comm w/ the prefetcher
-  rigtorp::SPSCQueue<int>* ring;
+public:
+  FirstCoreFunc(std::atomic<uint64_t>* recvd_req_cnt_):
+    recvd_req_cnt(recvd_req_cnt_), handled_req_cnt{0} {}
 
-  Indexer(
-    void* mmap_ret,
-    rigtorp::SPSCQueue<int>* ring_,
-    std::atomic<uint64_t>* req_cnt_)
-  : read_top(reinterpret_cast<char*>(mmap_ret)),
-    ring(ring_),
-    recvd_req_cnt(req_cnt_)
-  {
-    read_count = *(reinterpret_cast<uint32_t*>(read_top));
-    read_top += sizeof(uint32_t);
-    handled_req_cnt = 0;
-  }
-
-  size_t check_avail_cnts()
+  size_t get_avail_req_cnts()
   {
     uint64_t avail_cnt;
     size_t dyn_batch;
 
     do
     {
-      uint64_t load_val = recvd_req_cnt->load(std::memory_order_relaxed);
+      uint64_t load_val =
+        recvd_req_cnt->load(std::memory_order_relaxed);
       avail_cnt = load_val - handled_req_cnt;
       if (avail_cnt >= MAX_BATCH)
         dyn_batch = MAX_BATCH;
@@ -298,176 +93,22 @@ struct Indexer
 
     return dyn_batch;
   }
-
-  void run()
-  {
-    uint32_t read_idx = 0;
-    char* read_head = read_top;
-    int i, ret = 0;
-    int batch; // = MAX_BATCH;
-
-    while (1)
-    {
-      if (read_idx > (read_count - batch))
-      {
-        read_head = read_top;
-        read_idx = 0;
-      }
-
-      batch = check_avail_cnts();
-
-      for (i = 0; i < batch; i++)
-      {
-        ret = T::prepare_cowns(read_head);
-        read_head += ret;
-        read_idx++;
-      }
-
-      ring->push(batch);
-    }
-  }
 };
 
-template<typename T>
-struct Prefetcher
+class LastCoreFunc
 {
-  char* read_top;
-  uint32_t read_count;
-  rigtorp::SPSCQueue<int>* ring;
-
-#if defined(INDEXER)
-  rigtorp::SPSCQueue<int>* ring_indexer;
-  uint64_t handled_req_cnt;
-
-  Prefetcher(
-    void* mmap_ret,
-    rigtorp::SPSCQueue<int>* ring_,
-    rigtorp::SPSCQueue<int>* ring_indexer_)
-  : read_top(reinterpret_cast<char*>(mmap_ret)),
-    ring(ring_),
-    ring_indexer(ring_indexer_)
-#else
-
-  Prefetcher(void* mmap_ret, rigtorp::SPSCQueue<int>* ring_)
-  : read_top(reinterpret_cast<char*>(mmap_ret)), ring(ring_)
-#endif
-  {
-    read_count = *(reinterpret_cast<uint32_t*>(read_top));
-    read_top += sizeof(uint32_t);
-  }
-
-  void run()
-  {
-    int ret;
-    uint32_t idx = 0;
-    char* read_head = read_top;
-    char* prepare_read_head = read_top;
-    size_t i;
-    size_t batch_sz;
-
-    while (1)
-    {
-      if (idx > (read_count - MAX_BATCH))
-      {
-        read_head = read_top;
-        prepare_read_head = read_top;
-        idx = 0;
-      }
-
-#ifdef INDEXER
-      if (!ring_indexer->front())
-        continue;
-#endif
-
-      batch_sz = static_cast<size_t>(*ring_indexer->front());
-
-#ifdef TEST_TWO
-      for (i = 0; i < batch_sz; i++)
-      {
-        ret = T::prepare_cowns(prepare_read_head);
-        prepare_read_head += ret;
-      }
-#endif
-
-      for (i = 0; i < batch_sz; i++)
-      {
-#if defined(TEST_TWO) || defined(INDEXER)
-        ret = T::prefetch_cowns(read_head);
-#else
-        ret = T::prepare_process(read_head, RW, LLC_LOCALITY);
-#endif
-        read_head += ret;
-        idx++;
-      }
-
-#ifdef INDEXER
-      ring->push(batch_sz);
-      ring_indexer->pop();
-#else
-      ring->push(ret);
-#endif
-    }
-  }
-};
-
-template<typename T>
-struct Spawner
-{
-  uint8_t worker_cnt;
+protected:
   bool counter_registered;
-  uint16_t rnd;
-  uint32_t read_count;
-  char* read_top;
-  char* read_head;
-  char* prepare_read_head;
-  rigtorp::SPSCQueue<int>* ring;
+  uint64_t tx_count;
+  uint8_t worker_cnt;
   std::unordered_map<std::thread::id, uint64_t*>* counter_map;
-  std::mutex* counter_map_mutex;
-  std::vector<uint64_t*> counter_vec; // FIXME
-
+  ts_type last_print_ts;
   uint64_t tx_exec_sum;
   uint64_t last_tx_exec_sum;
   uint64_t tx_spawn_sum;
-
 #ifdef RPC_LATENCY
-  uint64_t txn_log_id = 0;
-  uint64_t init_time_log_arr;
   FILE* res_log_fd;
-  ts_type init_time;
 #endif
-
-  ts_type last_print;
-
-  Spawner(
-    void* mmap_ret,
-    uint8_t worker_cnt_,
-    std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
-    std::mutex* counter_map_mutex_,
-    rigtorp::SPSCQueue<int>* ring_
-#ifdef RPC_LATENCY
-    ,
-    uint64_t init_time_log_arr_,
-    FILE* res_log_fd_
-#endif
-    )
-  : read_top(reinterpret_cast<char*>(mmap_ret)),
-    worker_cnt(worker_cnt_),
-    counter_map(counter_map_),
-    counter_map_mutex(counter_map_mutex_),
-    ring(ring_)
-#ifdef RPC_LATENCY
-    ,
-    init_time_log_arr(init_time_log_arr_),
-    res_log_fd(res_log_fd_)
-#endif
-  {
-    read_count = *(reinterpret_cast<uint32_t*>(read_top));
-    read_top += sizeof(uint32_t);
-    read_head = read_top;
-    prepare_read_head = read_top;
-    last_tx_exec_sum = 0;
-    tx_spawn_sum = 0;
-  }
 
   void track_worker_counter()
   {
@@ -484,99 +125,192 @@ struct Spawner
     return sum;
   }
 
+public:
+  LastCoreFunc(
+    std::unordered_map<std::thread::id, uint64_t*>* counter_map_, uint8_t worker_cnt_
 #ifdef RPC_LATENCY
+    , FILE* res_log_fd_
+#endif
+  ):
+    worker_cnt(worker_cnt_),
+#ifdef RPC_LATENCY
+    res_log_fd(res_log_fd_),
+#endif
+    counter_map(counter_map_),
+    tx_count{0},
+    counter_registered{false},
+    tx_exec_sum{0},
+    last_tx_exec_sum{0},
+    last_print_ts{std::chrono::system_clock::now()} {}
+
+  void measure_throughput(size_t batch)
+  {
+    tx_count += batch;
+
+    if (!counter_registered) {
+      track_worker_counter();
+      return;
+    }
+
+    // Announce throughput
+    if (tx_count >= ANNOUNCE_THROUGHPUT_BATCH_SIZE)
+    {
+      auto time_now = std::chrono::system_clock::now();
+      std::chrono::duration<double> duration = time_now - last_print_ts;
+      auto dur_cnt = duration.count();
+
+      tx_exec_sum = calc_tx_exec_sum();
+
+      printf("spawn - %lf tx/s\n", tx_count / dur_cnt);
+      printf(
+        "exec  - %lf tx/s\n", (tx_exec_sum - last_tx_exec_sum) / dur_cnt);
+#ifdef RPC_LATENCY
+      fprintf(res_log_fd, "%lf\n", tx_count / dur_cnt);
+#endif
+      tx_count = 0;
+      last_tx_exec_sum = tx_exec_sum;
+      last_print_ts = time_now;
+    }
+  }
+};
+
+template<typename T>
+class alignas(64) Indexer : BaseDispatcher<T>, FirstCoreFunc
+{
+public:
+  InterCore* outQueue;
+
+  Indexer(void* global_buf_, InterCore* queue_, std::atomic<uint64_t>* req_cnt_):
+    BaseDispatcher<T>(global_buf_), FirstCoreFunc(req_cnt_), outQueue(queue_) {}
+
+  void run()
+  {
+    int idx{0}, batch{0};
+
+    while(!this->terminate())
+    {
+      batch = this->get_avail_req_cnts();
+
+      for (int i = 0; i < batch; i++)
+      {
+        this->curr_req = this->get_curr_req(idx++);
+        T::prepare_cowns(this->curr_req);
+        this->processed_cnt++;
+      }
+
+      outQueue->push(batch);
+    }
+  }
+};
+
+template<typename T>
+class alignas(64) Prefetcher: BaseDispatcher<T>
+{
+public:
+  InterCore* inQueue;
+  InterCore* outQueue;
+
+  Prefetcher(void* global_buf_, InterCore* outQueue_,  InterCore* inQueue_):
+    BaseDispatcher<T>(global_buf_), inQueue(inQueue_), outQueue(outQueue_) {}
+
+  void run()
+  {
+    int idx{0}, batch{0};
+
+    while(!this->terminate())
+    {
+      if (!inQueue->front())
+        continue;
+
+      batch = static_cast<int>(*inQueue->front());
+
+      // Prefetch into Spawner's LLC
+      for (int i = 0; i < batch; i++)
+      {
+        this->curr_req = this->get_curr_req(idx++);
+        T::prefetch_cowns(this->curr_req);
+        this->processed_cnt++;
+      }
+
+      outQueue->push(batch);
+      inQueue->pop();
+    }
+  }
+};
+
+template<typename T>
+class alignas(64) Spawner : BaseDispatcher<T>, LastCoreFunc
+{
+public:
+  InterCore* inQueue;
+  // TODO: fix log arr round
+#ifdef RPC_LATENCY
+  uint64_t txn_log_id= 0;
+  uint64_t init_time_log_arr;
+  ts_type init_time;
+#endif
+
+  Spawner(void* global_buf_, uint8_t worker_cnt_,
+    std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
+    std::mutex* counter_map_mutex_, InterCore* queue_
+#ifdef RPC_LATENCY
+    , uint64_t init_time_log_arr_, FILE* res_log_fd_
+#endif
+    ):
+    BaseDispatcher<T>(global_buf_),
+    LastCoreFunc(counter_map_, worker_cnt_
+#ifdef RPC_LATENCY
+    ,res_log_fd_
+#endif
+    ),
+    inQueue(queue_)
+#ifdef RPC_LATENCY
+    , init_time_log_arr(init_time_log_arr_)
+#endif
+  {}
+
   int dispatch_one()
   {
+#ifdef RPC_LATENCY
     init_time = *reinterpret_cast<ts_type*>(
       init_time_log_arr + (uint64_t)sizeof(ts_type) * txn_log_id);
 
     txn_log_id++;
-    return T::parse_and_process(read_head, init_time);
-  }
+    return T::parse_and_process(this->curr_req, init_time);
 #else
-  int dispatch_one()
-  {
-    return T::parse_and_process(read_head);
-  }
+    return T::parse_and_process(this->curr_req);
 #endif
+  }
 
   void run()
   {
-    uint32_t idx = 0;
-    int ret;
-    uint64_t tx_count = 0;
-    size_t i;
-    size_t batch_sz;
-    rnd = 1;
+    int idx{0}, batch{0}, pref_idx{0};
+    char* pref_curr_req = this->curr_req;
 
-    // warm-up
-    prepare_run();
-
-    // run
-    while (1)
+    while(!this->terminate())
     {
-#ifdef RPC_LATENCY
-      if (txn_log_id == 0)
-        last_print = std::chrono::system_clock::now();
-
-      if (txn_log_id > RPC_LOG_SIZE)
-        break;
-#endif
-
-      if (!ring->front())
+      if (!inQueue->front())
         continue;
 
-      batch_sz = static_cast<size_t>(*ring->front());
+      batch = static_cast<int>(*inQueue->front());
 
-      if (!counter_registered)
-        track_worker_counter();
-
-      if (idx > (read_count - MAX_BATCH))
+      // Prefetch into Spawner's L1 from LLC
+      for (int i = 0; i < batch; i++)
       {
-        read_head = read_top;
-        prepare_read_head = read_top;
-        idx = 0;
+        pref_curr_req = this->get_curr_req(pref_idx++);
+        T::prefetch_cowns(pref_curr_req);
       }
 
-      for (i = 0; i < batch_sz; i++)
+      for (int i = 0; i < batch; i++)
       {
-#if defined(TEST_TWO) || defined(INDEXER)
-        ret = T::prefetch_cowns(prepare_read_head);
-#else
-        ret = T::prepare_process(prepare_read_head, RW, L1D_LOCALITY);
-#endif
-        prepare_read_head += ret;
+        this->curr_req = this->get_curr_req(idx++);
+        dispatch_one();
+        this->processed_cnt++;
       }
 
-      for (i = 0; i < batch_sz; i++)
-      {
-        ret = dispatch_one();
-        read_head += ret;
-        idx++;
-        tx_count++;
-        tx_spawn_sum++;
-      }
+      inQueue->pop();
 
-      ring->pop();
-
-      // announce throughput
-      if (tx_count >= ANNOUNCE_THROUGHPUT_BATCH_SIZE)
-      {
-        auto time_now = std::chrono::system_clock::now();
-        std::chrono::duration<double> duration = time_now - last_print;
-        auto dur_cnt = duration.count();
-        if (counter_registered)
-          tx_exec_sum = calc_tx_exec_sum();
-        printf("spawn - %lf tx/s\n", tx_count / dur_cnt);
-        printf(
-          "exec  - %lf tx/s\n", (tx_exec_sum - last_tx_exec_sum) / dur_cnt);
-#ifdef RPC_LATENCY
-        fprintf(res_log_fd, "%lf\n", tx_count / dur_cnt);
-#endif
-        tx_count = 0;
-        last_tx_exec_sum = tx_exec_sum;
-        last_print = time_now;
-      }
+      this->measure_throughput(batch);
     }
   }
 };

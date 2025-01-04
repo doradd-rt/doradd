@@ -8,8 +8,8 @@
 static constexpr size_t BATCH_PREFETCHER = 8;
 static constexpr size_t BATCH_SPAWNER = 8;
 static constexpr size_t MAX_BATCH = 4;
-static constexpr uint64_t RPC_LOG_SIZE = 1'000'000;
-static constexpr uint64_t TX_COUNTER_LOG_SIZE = 400'000;
+static constexpr uint64_t RPC_LOG_SIZE = 4'000'000;
+static constexpr uint64_t TX_COUNTER_LOG_SIZE = 1'000'000;
 static constexpr uint64_t ANNOUNCE_THROUGHPUT_BATCH_SIZE = 1'000'000;
 static constexpr size_t CHANNEL_SIZE = 2;
 static constexpr size_t CHANNEL_SIZE_IDX_PREF = 2;
