@@ -1,9 +1,9 @@
 #pragma once
 
+#include "SPSCQueue.h"
 #include "config.hpp"
 #include "hugepage.hpp"
 #include "warmup.hpp"
-#include "SPSCQueue.h"
 
 #include <cassert>
 #include <fcntl.h>
@@ -30,10 +30,10 @@ template<typename T>
 class alignas(64) BaseDispatcher
 {
 protected:
-  uint32_t BUFFER_SIZE;
   DoraddBuf<T>* req_buf;
   char* curr_req;
-  uint64_t processed_cnt; // Local transaction counter
+  uint64_t processed_cnt = 0; // Local transaction counter
+  uint32_t BUFFER_SIZE;
 
   static constexpr uint64_t TERMINATION_COUNT = 40'000'000;
 
@@ -47,11 +47,11 @@ protected:
 
   char* get_curr_req(int idx)
   {
-    return reinterpret_cast<char*>(
-      &req_buf[idx % BUFFER_SIZE]);
+    return reinterpret_cast<char*>(&req_buf[idx % BUFFER_SIZE]);
   }
 
-  bool terminate() const {
+  bool terminate() const
+  {
     return processed_cnt >= TERMINATION_COUNT;
   }
 
@@ -62,35 +62,34 @@ class FirstCoreFunc
 {
 protected:
   std::atomic<uint64_t>* recvd_req_cnt;
-  uint64_t handled_req_cnt;
+  uint64_t handled_req_cnt = 0;
 
 public:
-  FirstCoreFunc(std::atomic<uint64_t>* recvd_req_cnt_):
-    recvd_req_cnt(recvd_req_cnt_), handled_req_cnt{0} {}
+  FirstCoreFunc(std::atomic<uint64_t>* recvd_req_cnt_)
+  : recvd_req_cnt(recvd_req_cnt_)
+  {}
 
   size_t get_avail_req_cnts()
   {
-    uint64_t avail_cnt;
-    size_t dyn_batch;
+    size_t dyn_batch = 0;
 
-    do
+    while (dyn_batch == 0)
     {
-      uint64_t load_val =
-        recvd_req_cnt->load(std::memory_order_relaxed);
-      avail_cnt = load_val - handled_req_cnt;
-      if (avail_cnt >= MAX_BATCH)
-        dyn_batch = MAX_BATCH;
-      else if (avail_cnt > 0)
-        dyn_batch = static_cast<size_t>(avail_cnt);
+      uint64_t avail_cnt =
+        recvd_req_cnt->load(std::memory_order_relaxed) - handled_req_cnt;
+
+      if (avail_cnt > 0)
+      {
+        dyn_batch =
+          (avail_cnt >= MAX_BATCH) ? MAX_BATCH : static_cast<size_t>(avail_cnt);
+      }
       else
       {
         _mm_pause();
-        continue;
       }
-    } while (avail_cnt == 0);
+    }
 
     handled_req_cnt += dyn_batch;
-
     return dyn_batch;
   }
 };
@@ -98,14 +97,12 @@ public:
 class LastCoreFunc
 {
 protected:
-  bool counter_registered;
-  uint64_t tx_count;
+  bool counter_registered = false;
+  uint64_t tx_count = 0;
   uint8_t worker_cnt;
   std::unordered_map<std::thread::id, uint64_t*>* counter_map;
-  ts_type last_print_ts;
-  uint64_t tx_exec_sum;
-  uint64_t last_tx_exec_sum;
-  uint64_t tx_spawn_sum;
+  ts_type last_print_ts = {};
+  uint64_t last_tx_exec_sum = 0;
 #ifdef RPC_LATENCY
   FILE* res_log_fd;
 #endif
@@ -116,116 +113,126 @@ protected:
       counter_registered = true;
   }
 
-  uint64_t calc_tx_exec_sum()
+  uint64_t calc_tx_exec_sum() const
   {
     uint64_t sum = 0;
     for (const auto& counter_pair : *counter_map)
       sum += *(counter_pair.second);
-
     return sum;
   }
 
 public:
   LastCoreFunc(
-    std::unordered_map<std::thread::id, uint64_t*>* counter_map_, uint8_t worker_cnt_
+    std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
+    uint8_t worker_cnt_
 #ifdef RPC_LATENCY
-    , FILE* res_log_fd_
+    ,
+    FILE* res_log_fd_
 #endif
-  ):
-    worker_cnt(worker_cnt_),
+    )
+  : worker_cnt(worker_cnt_),
+    counter_map(counter_map_)
 #ifdef RPC_LATENCY
-    res_log_fd(res_log_fd_),
+    ,
+    res_log_fd(res_log_fd_)
 #endif
-    counter_map(counter_map_),
-    tx_count{0},
-    counter_registered{false},
-    tx_exec_sum{0},
-    last_tx_exec_sum{0},
-    last_print_ts{std::chrono::system_clock::now()} {}
+  {}
 
   void measure_throughput(size_t batch)
   {
     tx_count += batch;
 
-    if (!counter_registered) {
+    if (!counter_registered)
+    {
       track_worker_counter();
       return;
     }
 
-    // Announce throughput
-    if (tx_count >= ANNOUNCE_THROUGHPUT_BATCH_SIZE)
-    {
-      auto time_now = std::chrono::system_clock::now();
-      std::chrono::duration<double> duration = time_now - last_print_ts;
-      auto dur_cnt = duration.count();
+    if (tx_count < ANNOUNCE_THROUGHPUT_BATCH_SIZE)
+      return;
 
-      tx_exec_sum = calc_tx_exec_sum();
+    auto now = std::chrono::system_clock::now();
 
-      printf("spawn - %lf tx/s\n", tx_count / dur_cnt);
-      printf(
-        "exec  - %lf tx/s\n", (tx_exec_sum - last_tx_exec_sum) / dur_cnt);
-#ifdef RPC_LATENCY
-      fprintf(res_log_fd, "%lf\n", tx_count / dur_cnt);
-#endif
+    // Initialize last_print_ts on the first measurement
+    if (last_print_ts.time_since_epoch().count() == 0) {
+      last_print_ts = now;
       tx_count = 0;
-      last_tx_exec_sum = tx_exec_sum;
-      last_print_ts = time_now;
+      last_tx_exec_sum = calc_tx_exec_sum();
+      return;
     }
+
+    double duration =
+      std::chrono::duration<double>(now - last_print_ts).count();
+
+    uint64_t current_exec_sum = calc_tx_exec_sum();
+    double spawn_rate = tx_count / duration;
+    double exec_rate = (current_exec_sum - last_tx_exec_sum) / duration;
+
+    printf("spawn - %lf rps\n", spawn_rate);
+    printf("exec  - %lf rps\n", exec_rate);
+#ifdef RPC_LATENCY
+    fprintf(res_log_fd, "%lf\n", spawn_rate);
+#endif
+
+    tx_count = 0;
+    last_tx_exec_sum = current_exec_sum;
+    last_print_ts = now;
   }
 };
 
 template<typename T>
-class alignas(64) Indexer : BaseDispatcher<T>, FirstCoreFunc
+class alignas(64) Indexer : public BaseDispatcher<T>, public FirstCoreFunc
 {
 public:
   InterCore* outQueue;
 
-  Indexer(void* global_buf_, InterCore* queue_, std::atomic<uint64_t>* req_cnt_):
-    BaseDispatcher<T>(global_buf_), FirstCoreFunc(req_cnt_), outQueue(queue_) {}
+  Indexer(void* global_buf_, InterCore* queue_, std::atomic<uint64_t>* req_cnt_)
+  : BaseDispatcher<T>(global_buf_), FirstCoreFunc(req_cnt_), outQueue(queue_)
+  {}
 
-  void run()
+  void run() override
   {
-    int idx{0}, batch{0};
+    int idx = 0;
 
-    while(!this->terminate())
+    while (!this->terminate())
     {
-      batch = this->get_avail_req_cnts();
+      size_t batch = this->get_avail_req_cnts();
 
-      for (int i = 0; i < batch; i++)
+      for (size_t i = 0; i < batch; ++i)
       {
         this->curr_req = this->get_curr_req(idx++);
         T::prepare_cowns(this->curr_req);
         this->processed_cnt++;
       }
 
-      outQueue->push(batch);
+      outQueue->push(static_cast<int>(batch));
     }
   }
 };
 
 template<typename T>
-class alignas(64) Prefetcher: BaseDispatcher<T>
+class alignas(64) Prefetcher : public BaseDispatcher<T>
 {
 public:
   InterCore* inQueue;
   InterCore* outQueue;
 
-  Prefetcher(void* global_buf_, InterCore* outQueue_,  InterCore* inQueue_):
-    BaseDispatcher<T>(global_buf_), inQueue(inQueue_), outQueue(outQueue_) {}
+  Prefetcher(void* global_buf_, InterCore* outQueue_, InterCore* inQueue_)
+  : BaseDispatcher<T>(global_buf_), inQueue(inQueue_), outQueue(outQueue_)
+  {}
 
-  void run()
+  void run() override
   {
-    int idx{0}, batch{0};
+    int idx = 0;
 
-    while(!this->terminate())
+    while (!this->terminate())
     {
       if (!inQueue->front())
         continue;
 
-      batch = static_cast<int>(*inQueue->front());
+      int batch = static_cast<int>(*inQueue->front());
 
-      // Prefetch into Spawner's LLC
-      for (int i = 0; i < batch; i++)
+      for (int i = 0; i < batch; ++i)
       {
         this->curr_req = this->get_curr_req(idx++);
         T::prefetch_cowns(this->curr_req);
@@ -239,33 +246,41 @@ public:
 };
 
 template<typename T>
-class alignas(64) Spawner : BaseDispatcher<T>, LastCoreFunc
+class alignas(64) Spawner : public BaseDispatcher<T>, public LastCoreFunc
 {
 public:
   InterCore* inQueue;
-  // TODO: fix log arr round
 #ifdef RPC_LATENCY
-  uint64_t txn_log_id= 0;
+  uint64_t txn_log_id = 0;
   uint64_t init_time_log_arr;
   ts_type init_time;
 #endif
 
-  Spawner(void* global_buf_, uint8_t worker_cnt_,
+  Spawner(
+    void* global_buf_,
+    uint8_t worker_cnt_,
     std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
-    std::mutex* counter_map_mutex_, InterCore* queue_
+    std::mutex* counter_map_mutex_,
+    InterCore* queue_
 #ifdef RPC_LATENCY
-    , uint64_t init_time_log_arr_, FILE* res_log_fd_
+    ,
+    uint64_t init_time_log_arr_,
+    FILE* res_log_fd_
 #endif
-    ):
-    BaseDispatcher<T>(global_buf_),
-    LastCoreFunc(counter_map_, worker_cnt_
+    )
+  : BaseDispatcher<T>(global_buf_),
+    LastCoreFunc(
+      counter_map_,
+      worker_cnt_
 #ifdef RPC_LATENCY
-    ,res_log_fd_
+      ,
+      res_log_fd_
 #endif
-    ),
+      ),
     inQueue(queue_)
 #ifdef RPC_LATENCY
-    , init_time_log_arr(init_time_log_arr_)
+    ,
+    init_time_log_arr(init_time_log_arr_)
 #endif
   {}
 
@@ -273,7 +288,7 @@ public:
   {
 #ifdef RPC_LATENCY
     init_time = *reinterpret_cast<ts_type*>(
-      init_time_log_arr + (uint64_t)sizeof(ts_type) * txn_log_id);
+      init_time_log_arr + static_cast<uint64_t>(sizeof(ts_type)) * txn_log_id);
 
     txn_log_id++;
     return T::parse_and_process(this->curr_req, init_time);
@@ -282,26 +297,26 @@ public:
 #endif
   }
 
-  void run()
+  void run() override
   {
-    int idx{0}, batch{0}, pref_idx{0};
+    int idx = 0;
+    int pref_idx = 0;
     char* pref_curr_req = this->curr_req;
 
-    while(!this->terminate())
+    while (!this->terminate())
     {
       if (!inQueue->front())
         continue;
 
-      batch = static_cast<int>(*inQueue->front());
+      int batch = static_cast<int>(*inQueue->front());
 
-      // Prefetch into Spawner's L1 from LLC
-      for (int i = 0; i < batch; i++)
+      for (int i = 0; i < batch; ++i)
       {
         pref_curr_req = this->get_curr_req(pref_idx++);
         T::prefetch_cowns(pref_curr_req);
       }
 
-      for (int i = 0; i < batch; i++)
+      for (int i = 0; i < batch; ++i)
       {
         this->curr_req = this->get_curr_req(idx++);
         dispatch_one();
