@@ -103,9 +103,6 @@ protected:
   std::unordered_map<std::thread::id, uint64_t*>* counter_map;
   ts_type last_print_ts = {};
   uint64_t last_tx_exec_sum = 0;
-#ifdef RPC_LATENCY
-  FILE* res_log_fd;
-#endif
 
   void track_worker_counter()
   {
@@ -124,18 +121,9 @@ protected:
 public:
   LastCoreFunc(
     std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
-    uint8_t worker_cnt_
-#ifdef RPC_LATENCY
-    ,
-    FILE* res_log_fd_
-#endif
-    )
+    uint8_t worker_cnt_)
   : worker_cnt(worker_cnt_),
     counter_map(counter_map_)
-#ifdef RPC_LATENCY
-    ,
-    res_log_fd(res_log_fd_)
-#endif
   {}
 
   void measure_throughput(size_t batch)
@@ -168,11 +156,8 @@ public:
     double spawn_rate = tx_count / duration;
     double exec_rate = (current_exec_sum - last_tx_exec_sum) / duration;
 
-    printf("spawn - %lf rps\n", spawn_rate);
-    printf("exec  - %lf rps\n", exec_rate);
-#ifdef RPC_LATENCY
-    fprintf(res_log_fd, "%lf\n", spawn_rate);
-#endif
+    std::cout << "Spawn throughput: " << spawn_rate << " rps" << std::endl;
+    std::cout << "Exec throughput: " << exec_rate << " rps" << std::endl;
 
     tx_count = 0;
     last_tx_exec_sum = current_exec_sum;
@@ -250,51 +235,31 @@ class alignas(64) Spawner : public BaseDispatcher<T>, public LastCoreFunc
 {
 public:
   InterCore* inQueue;
-#ifdef RPC_LATENCY
   uint64_t txn_log_id = 0;
   uint64_t init_time_log_arr;
-  ts_type init_time;
-#endif
 
   Spawner(
     void* global_buf_,
     uint8_t worker_cnt_,
     std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
     std::mutex* counter_map_mutex_,
-    InterCore* queue_
-#ifdef RPC_LATENCY
-    ,
-    uint64_t init_time_log_arr_,
-    FILE* res_log_fd_
-#endif
-    )
+    InterCore* queue_,
+    uint64_t init_time_log_arr_)
   : BaseDispatcher<T>(global_buf_),
     LastCoreFunc(
       counter_map_,
-      worker_cnt_
-#ifdef RPC_LATENCY
-      ,
-      res_log_fd_
-#endif
-      ),
-    inQueue(queue_)
-#ifdef RPC_LATENCY
-    ,
+      worker_cnt_),
+    inQueue(queue_),
     init_time_log_arr(init_time_log_arr_)
-#endif
   {}
 
   int dispatch_one()
   {
-#ifdef RPC_LATENCY
-    init_time = *reinterpret_cast<ts_type*>(
-      init_time_log_arr + static_cast<uint64_t>(sizeof(ts_type)) * txn_log_id);
+    ts_type init_time = *reinterpret_cast<ts_type*>(
+      init_time_log_arr + 
+      static_cast<uint64_t>(sizeof(ts_type)) * txn_log_id++);
 
-    txn_log_id++;
     return T::parse_and_process(this->curr_req, init_time);
-#else
-    return T::parse_and_process(this->curr_req);
-#endif
   }
 
   void run() override

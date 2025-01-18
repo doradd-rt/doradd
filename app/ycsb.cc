@@ -21,18 +21,11 @@
     } \
     write_set_l >>= 1; \
   }
-#ifdef LOG_LATENCY
-#  define M_LOG_LATENCY() \
+#define M_LOG_LATENCY() \
     { \
       TxCounter::instance().log_latency(init_time); \
       TxCounter::instance().incr(); \
     }
-#else
-#  define M_LOG_LATENCY() \
-    { \
-      TxCounter::instance().incr(); \
-    }
-#endif
 
 struct YCSBRow
 {
@@ -77,11 +70,7 @@ public:
     return sizeof(Marshalled);
   }
 
-#ifdef RPC_LATENCY
   static int parse_and_process(const char* input, ts_type init_time)
-#else
-  static int parse_and_process(const char* input)
-#endif // RPC_LATENCY
   {
     const Marshalled* txm = reinterpret_cast<const Marshalled*>(input);
 

@@ -5,6 +5,7 @@
 #include "pin-thread.hpp"
 #include "rpc_handler.hpp"
 #include "SPSCQueue.h"
+#include "txcounter.hpp"
 
 #include <thread>
 #include <unordered_map>
@@ -36,22 +37,12 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
     std::atomic<uint64_t> req_cnt(0);
 
     // Init RPC handler
-#ifdef RPC_LATENCY
     uint8_t* log_arr = static_cast<uint8_t*>(
       aligned_alloc_hpage(RPC_LOG_SIZE * sizeof(ts_type)));
 
     uint64_t log_arr_addr = (uint64_t)log_arr;
 
-    std::string res_log_dir = "./results/";
-    std::string res_log_suffix = "-latency.log";
-    std::string res_log_name = res_log_dir + gen_type + res_log_suffix;
-    FILE* res_log_fd =
-      fopen(reinterpret_cast<const char*>(res_log_name.c_str()), "w");
-
     RPCHandler rpc_handler(&req_cnt, gen_type, log_arr_addr);
-#else
-    RPCHandler rpc_handler(&req_cnt, gen_type);
-#endif // RPC_LATENCY
 
     // Map txn logs into memory
     int fd = open(log_name, O_RDONLY);
@@ -77,11 +68,8 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
       worker_cnt,
       counter_map,
       counter_map_mutex,
-      &req_cnt
-#  ifdef RPC_LATENCY
-      ,
+      &req_cnt,
       log_arr_addr
-#  endif
     );
 
     std::thread extern_thrd([&]() mutable {
@@ -100,7 +88,6 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
 
 #  if defined(INDEXER)
     Prefetcher<T> prefetcher(ret, &ring_pref_disp, &ring_idx_pref);
-#    ifdef RPC_LATENCY
     // give init_time_log_arr to spawner. Needed for capturing in when.
     Spawner<T> spawner(
       ret,
@@ -108,12 +95,7 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
       counter_map,
       counter_map_mutex,
       &ring_pref_disp,
-      log_arr_addr,
-      res_log_fd);
-#    else
-    Spawner<T> spawner(
-      ret, worker_cnt, counter_map, counter_map_mutex, &ring_pref_disp);
-#    endif // RPC_LATENCY
+      log_arr_addr);
 #  else
     Prefetcher<T> prefetcher(ret, &ring_pref_disp);
     Spawner<T> spawner(
@@ -160,27 +142,20 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
 
     pthread_cancel(rpc_handler_thread.native_handle());
 
-#ifdef LOG_LATENCY
-    printf("flush latency stats\n");
+    printf("Calculate latency stats\n");
+    log_arr_type all_samples(worker_cnt * TX_COUNTER_LOG_SIZE);
+    uint64_t idx = 0;
     for (const auto& entry : *log_map)
     {
       if (entry.second)
       {
-#  ifdef LOG_SCHED_OHEAD
-        for (std::tuple<uint32_t, uint32_t> value_tuple : *(entry.second))
-          fprintf(
-            res_log_fd,
-            "%u %u\n",
-            std::get<0>(value_tuple),
-            std::get<1>(value_tuple));
-#  else
         for (auto value : *(entry.second))
-          fprintf(res_log_fd, "%u\n", value);
-#  endif // LOG_SCHED_OHEAD
+          all_samples[idx++] = value;
       }
     }
-#endif
 
+    double p99 = TxCounter::percentile(all_samples, 99);
+    std::cout << "P99 latency: " << p99 << " µs" << std::endl;
     // sched.remove_external_event_source();
   };
 
