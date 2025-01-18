@@ -35,7 +35,7 @@ protected:
   uint64_t processed_cnt = 0; // Local transaction counter
   uint32_t BUFFER_SIZE;
 
-  static constexpr uint64_t TERMINATION_COUNT = 40'000'000;
+  static constexpr uint64_t TERMINATION_COUNT = RPC_LOG_SIZE;
 
   BaseDispatcher(void* mmap_ret)
   {

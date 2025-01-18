@@ -33,10 +33,7 @@ struct RPCHandler
         _mm_pause();
 
       if (i >= RPC_LOG_SIZE)
-      {
-        std::cout << "All reqs arrived" << std::endl;
         break;
-      }
       
       // record arrival timestamp for latency measuring
       auto* addr =

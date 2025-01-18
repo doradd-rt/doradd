@@ -32,7 +32,6 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
   // init and run dispatcher pipelines
   when() << [&]() {
     printf("Init and Run - Dispatcher Pipelines\n");
-    // sched.add_external_event_source();
 
     std::atomic<uint64_t> req_cnt(0);
 
@@ -128,21 +127,12 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
       rpc_handler.run();
     });
 
-    // flush latency logs
-    std::this_thread::sleep_for(std::chrono::seconds(20));
-#ifdef CORE_PIPE
-    pthread_cancel(spawner_thread.native_handle());
-    pthread_cancel(prefetcher_thread.native_handle());
-#  ifdef INDEXER
-    pthread_cancel(indexer_thread.native_handle());
-#  endif
-#else
-    pthread_cancel(extern_thrd.native_handle());
-#endif // CORE_PIPE
+    rpc_handler_thread.join();
+    spawner_thread.join();
+    prefetcher_thread.join();
+    indexer_thread.join();
 
-    pthread_cancel(rpc_handler_thread.native_handle());
-
-    printf("Calculate latency stats\n");
+    std::cout << "Calculate latency stats" << std::endl;
     log_arr_type all_samples(worker_cnt * TX_COUNTER_LOG_SIZE);
     uint64_t idx = 0;
     for (const auto& entry : *log_map)
@@ -156,7 +146,6 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
 
     double p99 = TxCounter::percentile(all_samples, 99);
     std::cout << "P99 latency: " << p99 << " µs" << std::endl;
-    // sched.remove_external_event_source();
   };
 
   sched.run();
