@@ -55,6 +55,17 @@ protected:
     return processed_cnt >= TERMINATION_COUNT;
   }
 
+  template<typename Fn, typename... Args>
+  void
+  process_batch(size_t batch_size, int idx, Fn operation, Args&&... extra_args)
+  {
+    for (size_t i = 0; i < batch_size; ++i)
+    {
+      this->curr_req = this->get_curr_req(idx++);
+      operation(this->curr_req, std::forward<Args>(extra_args)...);
+    }
+  }
+
   virtual void run() = 0;
 };
 
@@ -122,8 +133,7 @@ public:
   LastCoreFunc(
     std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
     uint8_t worker_cnt_)
-  : worker_cnt(worker_cnt_),
-    counter_map(counter_map_)
+  : worker_cnt(worker_cnt_), counter_map(counter_map_)
   {}
 
   void measure_throughput(size_t batch)
@@ -142,7 +152,8 @@ public:
     auto now = std::chrono::system_clock::now();
 
     // Initialize last_print_ts on the first measurement
-    if (last_print_ts.time_since_epoch().count() == 0) {
+    if (last_print_ts.time_since_epoch().count() == 0)
+    {
       last_print_ts = now;
       tx_count = 0;
       last_tx_exec_sum = calc_tx_exec_sum();
@@ -183,12 +194,9 @@ public:
     {
       size_t batch = this->get_avail_req_cnts();
 
-      for (size_t i = 0; i < batch; ++i)
-      {
-        this->curr_req = this->get_curr_req(idx++);
-        T::prepare_cowns(this->curr_req);
-        this->processed_cnt++;
-      }
+      this->process_batch(
+        batch, this->processed_cnt, [](char* req) { T::prepare_cowns(req); });
+      this->processed_cnt += batch;
 
       outQueue->push(static_cast<int>(batch));
     }
@@ -217,12 +225,9 @@ public:
 
       int batch = static_cast<int>(*inQueue->front());
 
-      for (int i = 0; i < batch; ++i)
-      {
-        this->curr_req = this->get_curr_req(idx++);
-        T::prefetch_cowns(this->curr_req);
-        this->processed_cnt++;
-      }
+      this->process_batch(
+        batch, this->processed_cnt, [](char* req) { T::prefetch_cowns(req); });
+      this->processed_cnt += batch;
 
       outQueue->push(batch);
       inQueue->pop();
@@ -246,20 +251,16 @@ public:
     InterCore* queue_,
     uint64_t init_time_log_arr_)
   : BaseDispatcher<T>(global_buf_),
-    LastCoreFunc(
-      counter_map_,
-      worker_cnt_),
+    LastCoreFunc(counter_map_, worker_cnt_),
     inQueue(queue_),
     init_time_log_arr(init_time_log_arr_)
   {}
 
-  int dispatch_one()
+  ts_type get_init_time()
   {
-    ts_type init_time = *reinterpret_cast<ts_type*>(
-      init_time_log_arr + 
+    return *reinterpret_cast<ts_type*>(
+      init_time_log_arr +
       static_cast<uint64_t>(sizeof(ts_type)) * txn_log_id++);
-
-    return T::parse_and_process(this->curr_req, init_time);
   }
 
   void run() override
@@ -275,19 +276,14 @@ public:
 
       int batch = static_cast<int>(*inQueue->front());
 
-      for (int i = 0; i < batch; ++i)
-      {
-        pref_curr_req = this->get_curr_req(pref_idx++);
-        T::prefetch_cowns(pref_curr_req);
-      }
+      this->process_batch(
+        batch, this->processed_cnt, [](char* req) { T::prefetch_cowns(req); });
+      this->process_batch(batch, this->processed_cnt, [this](char* req) {
+        ts_type init_time = this->get_init_time();
+        T::parse_and_process(req, init_time);
+      });
 
-      for (int i = 0; i < batch; ++i)
-      {
-        this->curr_req = this->get_curr_req(idx++);
-        dispatch_one();
-        this->processed_cnt++;
-      }
-
+      this->processed_cnt += batch;
       inQueue->pop();
 
       this->measure_throughput(batch);
