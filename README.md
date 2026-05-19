@@ -9,6 +9,17 @@ each node in state machine replication needs to execute a pre-agreed sequence of
 deterministically parallel log replay can be applied to fast failure recovery and live migration;
 deterministic databases scale efficiently via bypassing the need of two-phase commit across partitions.
 
+## References
+```
+@inproceedings{doradd,
+  title={DORADD: Deterministic Parallel Execution in the Era of Microsecond-Scale Computing},
+  author={Liu, Zhengqing and Unal, Musa and Parkinson, Matthew J and Kogias, Marios},
+  booktitle={Proceedings of the 30th ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel Programming},
+  pages={282--296},
+  year={2025}
+}
+```
+
 ## Building
 
 1. Clone and pull the submodules
