@@ -133,14 +133,14 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
     indexer_thread.join();
 
     std::cout << "Calculate latency stats" << std::endl;
-    log_arr_type all_samples(worker_cnt * TX_COUNTER_LOG_SIZE);
-    uint64_t idx = 0;
+    log_arr_type all_samples;
+    all_samples.reserve(worker_cnt * TX_COUNTER_LOG_SIZE);
     for (const auto& entry : *log_map)
     {
       if (entry.second)
       {
         for (auto value : *(entry.second))
-          all_samples[idx++] = value;
+          all_samples.push_back(value);
       }
     }
 

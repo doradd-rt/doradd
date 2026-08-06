@@ -31,7 +31,6 @@ class alignas(64) BaseDispatcher
 {
 protected:
   DoraddBuf<T>* req_buf;
-  char* curr_req;
   uint64_t processed_cnt = 0; // Local transaction counter
   uint32_t BUFFER_SIZE;
 
@@ -42,10 +41,9 @@ protected:
     BUFFER_SIZE = *(reinterpret_cast<uint32_t*>(mmap_ret));
     req_buf = reinterpret_cast<DoraddBuf<T>*>(
       reinterpret_cast<char*>(mmap_ret) + sizeof(uint32_t));
-    curr_req = reinterpret_cast<char*>(req_buf);
   }
 
-  char* get_curr_req(int idx)
+  char* get_curr_req(uint64_t idx)
   {
     return reinterpret_cast<char*>(&req_buf[idx % BUFFER_SIZE]);
   }
@@ -56,13 +54,12 @@ protected:
   }
 
   template<typename Fn, typename... Args>
-  void
-  process_batch(size_t batch_size, int idx, Fn operation, Args&&... extra_args)
+  void process_batch(
+    size_t batch_size, uint64_t start_idx, Fn operation, Args&&... extra_args)
   {
     for (size_t i = 0; i < batch_size; ++i)
     {
-      this->curr_req = this->get_curr_req(idx++);
-      operation(this->curr_req, std::forward<Args>(extra_args)...);
+      operation(get_curr_req(start_idx++), std::forward<Args>(extra_args)...);
     }
   }
 
@@ -188,8 +185,6 @@ public:
 
   void run() override
   {
-    int idx = 0;
-
     while (!this->terminate())
     {
       size_t batch = this->get_avail_req_cnts();
@@ -216,8 +211,6 @@ public:
 
   void run() override
   {
-    int idx = 0;
-
     while (!this->terminate())
     {
       if (!inQueue->front())
@@ -265,9 +258,8 @@ public:
 
   void run() override
   {
-    int idx = 0;
-    int pref_idx = 0;
-    char* pref_curr_req = this->curr_req;
+    // warm-up
+    prepare_run();
 
     while (!this->terminate())
     {
