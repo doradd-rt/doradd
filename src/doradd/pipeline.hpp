@@ -37,11 +37,11 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
 
     // Init RPC handler
     uint8_t* log_arr = static_cast<uint8_t*>(
-      aligned_alloc_hpage(RPC_LOG_SIZE * sizeof(ts_type)));
+      aligned_alloc_hpage(T::RPC_LOG_SIZE * sizeof(ts_type)));
 
     uint64_t log_arr_addr = (uint64_t)log_arr;
 
-    RPCHandler rpc_handler(&req_cnt, gen_type, log_arr_addr);
+    RPCHandler rpc_handler(&req_cnt, gen_type, log_arr_addr, T::RPC_LOG_SIZE);
 
     // Map txn logs into memory
     int fd = open(log_name, O_RDONLY);
@@ -131,6 +131,17 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
     spawner_thread.join();
     prefetcher_thread.join();
     indexer_thread.join();
+
+    // wait for workers to execute all spawned transactions before
+    // reading their latency logs
+    uint64_t executed = 0;
+    while (executed < T::RPC_LOG_SIZE)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      executed = 0;
+      for (const auto& entry : *counter_map)
+        executed += *(entry.second);
+    }
 
     std::cout << "Calculate latency stats" << std::endl;
     log_arr_type all_samples;

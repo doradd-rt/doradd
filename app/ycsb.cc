@@ -35,6 +35,9 @@ struct YCSBRow
 struct YCSBTransaction
 {
 public:
+  // requests per run
+  static constexpr uint64_t RPC_LOG_SIZE = 4'000'000;
+
   static Index<YCSBRow>* index;
 
   typedef struct __attribute__((packed))
@@ -101,12 +104,8 @@ public:
 #endif
 
     using AcqType = acquired_cown<YCSBRow>;
-#ifdef RPC_LATENCY
     when(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9)
       << [ws_cap, init_time]
-#else
-    when(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9) << [ws_cap]
-#endif
       (AcqType acq_row0,
        AcqType acq_row1,
        AcqType acq_row2,

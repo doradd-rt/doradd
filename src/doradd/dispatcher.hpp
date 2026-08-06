@@ -34,7 +34,7 @@ protected:
   uint64_t processed_cnt = 0; // Local transaction counter
   uint32_t BUFFER_SIZE;
 
-  static constexpr uint64_t TERMINATION_COUNT = RPC_LOG_SIZE;
+  static constexpr uint64_t TERMINATION_COUNT = T::RPC_LOG_SIZE;
 
   BaseDispatcher(void* mmap_ret)
   {
@@ -53,13 +53,12 @@ protected:
     return processed_cnt >= TERMINATION_COUNT;
   }
 
-  template<typename Fn, typename... Args>
-  void process_batch(
-    size_t batch_size, uint64_t start_idx, Fn operation, Args&&... extra_args)
+  template<typename Fn>
+  void process_batch(size_t batch_size, uint64_t start_idx, Fn operation)
   {
     for (size_t i = 0; i < batch_size; ++i)
     {
-      operation(get_curr_req(start_idx++), std::forward<Args>(extra_args)...);
+      operation(get_curr_req(start_idx++));
     }
   }
 

@@ -57,8 +57,6 @@ add_custom_command(
 )
 
 # TPCC
-# FIXME
-if(false)
 add_executable(tpcc ${CMAKE_SOURCE_DIR}/tpcc_gen.cc)
 
 
@@ -78,4 +76,3 @@ target_compile_definitions(tpcc PRIVATE -DACQUIRE_ALL)
 target_link_libraries(tpcc PRIVATE ${CMAKE_THREAD_LIBS_INIT})
 target_link_libraries(tpcc PRIVATE atomic)
 target_include_directories(tpcc PRIVATE ../external/SPSCQueue/include/rigtorp)
-endif()
