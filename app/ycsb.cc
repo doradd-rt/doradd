@@ -21,41 +21,37 @@
     } \
     write_set_l >>= 1; \
   }
-#ifdef LOG_LATENCY
-#  define M_LOG_LATENCY() \
+#define M_LOG_LATENCY() \
     { \
       TxCounter::instance().log_latency(init_time); \
       TxCounter::instance().incr(); \
     }
-#else
-#  define M_LOG_LATENCY() \
-    { \
-      TxCounter::instance().incr(); \
-    }
-#endif
 
 struct YCSBRow
 {
   char payload[ROW_SIZE];
 };
 
-struct __attribute__((packed)) YCSBTransactionMarshalled
-{
-  uint32_t indices[ROWS_PER_TX];
-  uint16_t write_set;
-  uint64_t cown_ptrs[ROWS_PER_TX];
-  uint8_t pad[6];
-};
-static_assert(sizeof(YCSBTransactionMarshalled) == 128);
-
 struct YCSBTransaction
 {
 public:
+  // requests per run
+  static constexpr uint64_t RPC_LOG_SIZE = 4'000'000;
+
   static Index<YCSBRow>* index;
+
+  typedef struct __attribute__((packed))
+  {
+    uint32_t indices[ROWS_PER_TX];
+    uint16_t write_set;
+    uint64_t cown_ptrs[ROWS_PER_TX];
+    uint8_t pad[6];
+  } Marshalled;
+  static_assert(sizeof(Marshalled) == 128);
 
   static int prepare_cowns(char* input)
   {
-    auto txm = reinterpret_cast<YCSBTransactionMarshalled*>(input);
+    auto txm = reinterpret_cast<Marshalled*>(input);
 
     for (int i = 0; i < ROWS_PER_TX; i++)
     {
@@ -63,28 +59,23 @@ public:
       txm->cown_ptrs[i] = cown.get_base_addr();
     }
 
-    return sizeof(YCSBTransactionMarshalled);
+    return sizeof(Marshalled);
   }
 
   static int prefetch_cowns(const char* input)
   {
-    auto txm = reinterpret_cast<const YCSBTransactionMarshalled*>(input);
+    auto txm = reinterpret_cast<const Marshalled*>(input);
 
     for (int i = 0; i < ROWS_PER_TX; i++)
       __builtin_prefetch(
         reinterpret_cast<const void*>(txm->cown_ptrs[i]), 1, 3);
 
-    return sizeof(YCSBTransactionMarshalled);
+    return sizeof(Marshalled);
   }
 
-#ifdef RPC_LATENCY
   static int parse_and_process(const char* input, ts_type init_time)
-#else
-  static int parse_and_process(const char* input)
-#endif // RPC_LATENCY
   {
-    const YCSBTransactionMarshalled* txm =
-      reinterpret_cast<const YCSBTransactionMarshalled*>(input);
+    const Marshalled* txm = reinterpret_cast<const Marshalled*>(input);
 
     auto ws_cap = txm->write_set;
 
@@ -113,12 +104,8 @@ public:
 #endif
 
     using AcqType = acquired_cown<YCSBRow>;
-#ifdef RPC_LATENCY
     when(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9)
       << [ws_cap, init_time]
-#else
-    when(row0, row1, row2, row3, row4, row5, row6, row7, row8, row9) << [ws_cap]
-#endif
       (AcqType acq_row0,
        AcqType acq_row1,
        AcqType acq_row2,
@@ -144,7 +131,7 @@ public:
         TXN(9);
         M_LOG_LATENCY();
       };
-    return sizeof(YCSBTransactionMarshalled);
+    return sizeof(Marshalled);
   }
   YCSBTransaction(const YCSBTransaction&) = delete;
   YCSBTransaction& operator=(const YCSBTransaction&) = delete;

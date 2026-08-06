@@ -89,11 +89,13 @@ struct TPCCTransactionMarshalled
 struct TPCCTransaction
 {
 public:
+  using Marshalled = TPCCTransactionMarshalled;
+
+  // requests per run; bounded by order table capacity (MAX_ORDER_TRANSACTIONS)
+  static constexpr uint64_t RPC_LOG_SIZE = 1'000'000;
+
   // Bit field. Assume less than 16 concurrent rows per transaction
   // uint16_t write_set;
-#ifdef LOG_LATENCY
-  // std::chrono::time_point<std::chrono::system_clock> init_time;
-#endif
   // static Index<YCSBRow>* index;
   static Database* index;
 
@@ -166,7 +168,6 @@ public:
   }
 #endif // INDEXER
 
-#ifdef LOG_LATENCY
 #define NEWORDER_END() \
   { \
     cown_ptr<Order> o_cown = make_cown<Order>(o); \
@@ -176,22 +177,8 @@ public:
     TxCounter::instance().incr(); \
     TxCounter::instance().log_latency(init_time); \
   }
-#else
-#define NEWORDER_END() \
-  { \
-    cown_ptr<Order> o_cown = make_cown<Order>(o); \
-    cown_ptr<NewOrder> no_cown = make_cown<NewOrder>(no); \
-    index->order_table.insert_row(order_hash_key, std::move(o_cown)); \
-    index->new_order_table.insert_row(neworder_hash_key, std::move(no_cown)); \
-    TxCounter::instance().incr(); \
-  }
-#endif
 
-#ifdef RPC_LATENCY
   static int parse_and_process(const char* input, ts_type init_time)
-#else
-  static int parse_and_process(const char* input)
-#endif // RPC_LATENCY
   {
     const TPCCTransactionMarshalled* txm = reinterpret_cast<const TPCCTransactionMarshalled*>(input);
 
@@ -246,10 +233,8 @@ public:
         _c->c_ytd_payment += h_amount;
         _c->c_payment_cnt += 1;
 
-#ifdef LOG_LATENCY
         TxCounter::instance().log_latency(init_time);
-#endif
-       TxCounter::instance().incr();
+        TxCounter::instance().incr();
       };
     }
 

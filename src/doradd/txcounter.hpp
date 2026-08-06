@@ -25,13 +25,6 @@ struct TxCounter
     tx_cnt++;
   }
 
-#ifdef LOG_LATENCY
-#  ifdef LOG_SCHED_OHEAD
-  void log_latency(uint32_t exec_time, uint32_t txn_time)
-  {
-    log_arr->push_back({exec_time, txn_time});
-  }
-#  else
   void log_latency(ts_type init_time)
   {
     if (tx_cnt % SAMPLE_RATE == 0)
@@ -44,34 +37,54 @@ struct TxCounter
       log_arr->push_back(log_duration);
     }
   }
-#  endif
-#endif
+
+  // Function to compute the percentile of a vector
+  static double percentile(const log_arr_type &vec,
+                           double percentile) {
+    // Make sure the vector is not empty
+    if (vec.empty()) {
+      return 0.0;
+    }
+
+    // Sort the vector
+    log_arr_type sortedVec = vec;
+    std::sort(sortedVec.begin(), sortedVec.end());
+
+    // Calculate the index corresponding to the percentile
+    double index = (percentile / 100.0) * (sortedVec.size() - 1);
+
+    // If index is an integer
+    if (index == std::floor(index)) {
+      return sortedVec[static_cast<int>(index)];
+    }
+
+    // If index is a fractional value, interpolate
+    int lowerIndex = std::floor(index);
+    int upperIndex = std::ceil(index);
+    double lowerValue = sortedVec[lowerIndex];
+    double upperValue = sortedVec[upperIndex];
+    return lowerValue + (index - lowerIndex) * (upperValue - lowerValue);
+  }
 
 private:
   uint64_t tx_cnt;
-#ifdef LOG_LATENCY
   log_arr_type* log_arr;
-#endif
 
   TxCounter()
   {
     tx_cnt = 0;
     std::lock_guard<std::mutex> lock(*counter_map_mutex);
     (*counter_map)[std::this_thread::get_id()] = &tx_cnt;
-#ifdef LOG_LATENCY
     log_arr = new log_arr_type();
     log_arr->reserve(TX_COUNTER_LOG_SIZE);
     (*log_map)[std::this_thread::get_id()] = log_arr;
-#endif
   }
 
   ~TxCounter() noexcept
   {
     std::lock_guard<std::mutex> lock(*counter_map_mutex);
     counter_map->erase(std::this_thread::get_id());
-#ifdef LOG_LATENCY
     log_map->erase(std::this_thread::get_id());
-#endif
   }
 
   // Deleted to ensure singleton pattern
