@@ -89,12 +89,7 @@ void build_pipelines(int worker_cnt, char* log_name, char* gen_type)
     Prefetcher<T> prefetcher(ret, &ring_pref_disp, &ring_idx_pref);
     // give init_time_log_arr to spawner. Needed for capturing in when.
     Spawner<T> spawner(
-      ret,
-      worker_cnt,
-      counter_map,
-      counter_map_mutex,
-      &ring_pref_disp,
-      log_arr_addr);
+      ret, worker_cnt, counter_map, &ring_pref_disp, log_arr_addr);
 #  else
     Prefetcher<T> prefetcher(ret, &ring_pref_disp);
     Spawner<T> spawner(

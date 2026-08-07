@@ -101,6 +101,7 @@ public:
   }
 };
 
+// counter_map is read unlocked: safe once workers registered, stale reads ok
 class LastCoreFunc
 {
 protected:
@@ -239,7 +240,6 @@ public:
     void* global_buf_,
     uint8_t worker_cnt_,
     std::unordered_map<std::thread::id, uint64_t*>* counter_map_,
-    std::mutex* counter_map_mutex_,
     InterCore* queue_,
     uint64_t init_time_log_arr_)
   : BaseDispatcher<T>(global_buf_),
